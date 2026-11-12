@@ -1,0 +1,36 @@
+# Step 0: the naive service. One app, one Postgres, two third-party APIs (mocked).
+# Every container below is capped at 1 CPU, so the numbers are small on purpose.
+name: shortener
+
+services:
+  db:
+    image: postgres:17
+    cpus: 1
+    environment:
+      POSTGRES_USER: shortener
+      POSTGRES_PASSWORD: shortener
+      POSTGRES_DB: shortener
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shortener"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  thirdparty:
+    build: .
+    command: thirdparty
+    cpus: 1
+    ports: ["9000:9000"]
+
+  app:
+    build: .
+    command: app
+    cpus: 1
+    environment:
+      DATABASE_URL: postgres://shortener:shortener@db:5432/shortener?pool_max_conns=10
+      SCAN_URL: http://thirdparty:9000/scan
+      ANALYTICS_URL: http://thirdparty:9000/analytics
+    ports: ["${APP_PORT:-8088}:8080"]
+    depends_on:
+      db: {condition: service_healthy}
+      thirdparty: {condition: service_started}

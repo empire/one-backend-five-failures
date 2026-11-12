@@ -1,0 +1,5 @@
+# Raw load-test output is large; the per-second series and the summary are what we keep.
+results/**/k6.json.gz
+results/**/cpu.jsonl
+results/**/k6.log
+results/**/.bench
