@@ -1,9 +1,8 @@
 // Command bench turns one load-test run into numbers.
 //
-//	bench sample -out cpu.jsonl -services app,db     record container CPU (and /debug/vars) once a second until stopped
+//	bench sample -out cpu.jsonl -services app1,app2,db  record container CPU (and /debug/vars) once a second until stopped
 //	bench series -k6 k6.json.gz -cpu cpu.jsonl ...   aggregate one k6 run into series.json and summary.json
-//	bench merge -out results/step run-1 run-2 ...    median of several runs, plus the series of the median run
-//	bench env -out env.json                          record the machine, Docker and commit
+//	bench demo -k6 k6.json.gz -out dir               score a steady run: 401 share, and the effect of a kill
 //
 // CPU is read from the container's cgroup, as a share of the container's own CPU cap,
 // so 100 means "this container is using all the CPU it is allowed".
@@ -42,10 +41,8 @@ func main() {
 		sample(os.Args[2:])
 	case "series":
 		series(os.Args[2:])
-	case "merge":
-		merge(os.Args[2:])
-	case "env":
-		envInfo(os.Args[2:])
+	case "demo":
+		demo(os.Args[2:])
 	default:
 		log.Fatalf("unknown command %q", os.Args[1])
 	}
@@ -69,7 +66,7 @@ func sample(args []string) {
 	out := fs.String("out", "cpu.jsonl", "output file")
 	services := fs.String("services", "app,db", "compose services to watch (comma separated)")
 	project := fs.String("project", "shortener", "compose project name")
-	expvarURL := fs.String("expvar", "", "optional /debug/vars URL; numeric values are recorded")
+	expvarURL := fs.String("expvar", "", "optional /debug/vars URL(s), comma separated; numeric values are recorded and summed over the URLs")
 	_ = fs.Parse(args)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -176,7 +173,23 @@ func readKey(path, key string) (int64, bool) {
 	return 0, false
 }
 
-func fetchExpvar(url string) map[string]float64 {
+// fetchExpvar sums the numeric values of every URL. If one URL cannot be read, it returns nil:
+// a sum over fewer apps would look like a drop in the counter.
+func fetchExpvar(urls string) map[string]float64 {
+	total := map[string]float64{}
+	for _, u := range strings.Split(urls, ",") {
+		one := fetchExpvarOne(u)
+		if one == nil {
+			return nil
+		}
+		for k, v := range one {
+			total[k] += v
+		}
+	}
+	return total
+}
+
+func fetchExpvarOne(url string) map[string]float64 {
 	c := http.Client{Timeout: 800 * time.Millisecond}
 	resp, err := c.Get(url)
 	if err != nil {
@@ -212,6 +225,7 @@ type k6Point struct {
 type bucket struct {
 	durations                              []float64
 	ok, unauth, throttled, failed, dropped int
+	creates                                int // requests of kind "create" (the ones that need a session)
 }
 
 // SecondRow is one second of one run, as the video reads it.
@@ -219,6 +233,7 @@ type SecondRow struct {
 	T         int                `json:"t"`
 	Level     int                `json:"level"`
 	Requests  int                `json:"requests"`
+	Creates   int                `json:"creates"`
 	OK        int                `json:"ok"`
 	Unauth    int                `json:"unauth"`
 	Throttled int                `json:"throttled"`
@@ -230,27 +245,13 @@ type SecondRow struct {
 	DBQPS     float64            `json:"db_qps,omitempty"`
 }
 
-// LevelRow is one load level of a ramp.
-type LevelRow struct {
-	Level      int                `json:"level"`
-	OfferedRPS int                `json:"offered_rps"`
-	Requests   int                `json:"requests"`
-	FailPct    float64            `json:"fail_pct"`
-	P95        float64            `json:"p95_ms"`
-	CPU        map[string]float64 `json:"cpu,omitempty"`
-	DBQPS      float64            `json:"db_qps,omitempty"`
-	Pass       bool               `json:"pass"`
-}
-
 func series(args []string) {
 	fs := flag.NewFlagSet("series", flag.ExitOnError)
 	k6path := fs.String("k6", "", "k6 --out json file (.gz allowed)")
 	cpuPath := fs.String("cpu", "", "cpu.jsonl from `bench sample`")
-	outDir := fs.String("out", ".", "directory for series.json and summary.json")
+	outDir := fs.String("out", ".", "directory for series.json")
 	stepS := fs.Int("step-s", 10, "seconds per level (STEP_S)")
 	stepRPS := fs.Int("step-rps", 250, "requests per second added per level (STEP_RPS)")
-	sloMS := fs.Float64("slo-ms", 200, "knee: p95 must stay under this")
-	settle := fs.Int("settle-s", 2, "seconds ignored at the start of each level")
 	levelsN := fs.Int("levels", 0, "number of levels in the ramp (LEVELS); seconds after the ramp are dropped")
 	_ = fs.Parse(args)
 
@@ -264,7 +265,7 @@ func series(args []string) {
 	prevLookups := -1.0
 	for s := 0; s < len(rows); s++ {
 		b := rows[s]
-		r := SecondRow{T: s, Level: s / *stepS + 1, Requests: len(b.durations) + b.dropped, OK: b.ok, Unauth: b.unauth, Throttled: b.throttled, Failed: b.failed, Dropped: b.dropped}
+		r := SecondRow{T: s, Level: s / *stepS + 1, Requests: len(b.durations) + b.dropped, Creates: b.creates, OK: b.ok, Unauth: b.unauth, Throttled: b.throttled, Failed: b.failed, Dropped: b.dropped}
 		r.P50, r.P95 = pct(b.durations, 50), pct(b.durations, 95)
 		if c, ok := cpu[s]; ok {
 			r.CPU = c.cpu
@@ -277,86 +278,19 @@ func series(args []string) {
 		}
 		seconds = append(seconds, r)
 	}
-
-	// Levels
-	var levels []LevelRow
-	nLevels := (len(seconds) + *stepS - 1) / *stepS
-	for l := 1; l <= nLevels; l++ {
-		var durs []float64
-		var total, failed int
-		cpuSum := map[string]float64{}
-		cpuN := map[string]int{}
-		var dbq float64
-		var dbn int
-		for s := (l - 1) * *stepS; s < l**stepS && s < len(seconds); s++ {
-			if s-(l-1)**stepS < *settle {
-				continue
-			}
-			b := rows[s]
-			durs = append(durs, b.durations...)
-			total += len(b.durations) + b.dropped
-			failed += b.failed + b.dropped + b.unauth
-			for k, v := range seconds[s].CPU {
-				cpuSum[k] += v
-				cpuN[k]++
-			}
-			if seconds[s].DBQPS > 0 {
-				dbq += seconds[s].DBQPS
-				dbn++
-			}
-		}
-		if total == 0 {
-			continue
-		}
-		lr := LevelRow{Level: l, OfferedRPS: l * *stepRPS, Requests: total, FailPct: round1(100 * float64(failed) / float64(total)), P95: round1(pct(durs, 95)), CPU: map[string]float64{}}
-		for k, v := range cpuSum {
-			lr.CPU[k] = round1(v / float64(cpuN[k]))
-		}
-		if dbn > 0 {
-			lr.DBQPS = round1(dbq / float64(dbn))
-		}
-		lr.Pass = lr.P95 < *sloMS && lr.FailPct < 1
-		levels = append(levels, lr)
-	}
-
-	// Knee: the highest level before the first level that fails.
-	knee := 0
-	for i, lr := range levels {
-		if !lr.Pass {
-			break
-		}
-		knee = i + 1
-	}
-	summary := map[string]any{"slo_ms": *sloMS, "step_s": *stepS, "step_rps": *stepRPS, "levels": levels}
-	if knee > 0 {
-		k := levels[knee-1]
-		summary["knee_level"] = k.Level
-		summary["knee_rps"] = k.OfferedRPS
-		summary["p95_at_knee_ms"] = k.P95
-		summary["cpu_at_knee"] = k.CPU
-		for _, lr := range levels {
-			if lr.OfferedRPS >= 2*k.OfferedRPS {
-				summary["fail_pct_at_2x_knee"] = lr.FailPct
-				summary["offered_rps_at_2x_knee"] = lr.OfferedRPS
-				break
-			}
-		}
-	}
-
 	writeJSON(filepath.Join(*outDir, "series.json"), seconds)
-	writeJSON(filepath.Join(*outDir, "summary.json"), summary)
-	fmt.Printf("%-6s %-9s %-9s %-8s %-8s %s\n", "level", "offered", "p95 ms", "fail %", "db qps", "cpu % of cap")
-	for _, lr := range levels {
-		mark := " "
-		if lr.Pass {
-			mark = "*"
+
+	// A short table to watch the service fail: for each level, how much of the offered load was not answered well.
+	fmt.Printf("%-6s %-9s %s\n", "level", "offered", "not served well (errors, timeouts, 401, dropped)")
+	for l := 1; (l-1)**stepS < len(seconds); l++ {
+		var total, bad int
+		for s := (l - 1) * *stepS; s < l**stepS && s < len(seconds); s++ {
+			total += seconds[s].Requests
+			bad += seconds[s].Failed + seconds[s].Unauth + seconds[s].Dropped
 		}
-		fmt.Printf("%-6d %-9d %-9.1f %-8.1f %-8.0f %v %s\n", lr.Level, lr.OfferedRPS, lr.P95, lr.FailPct, lr.DBQPS, lr.CPU, mark)
-	}
-	if knee > 0 {
-		fmt.Printf("knee: level %d = %d req/s (p95 %.1f ms)\n", levels[knee-1].Level, levels[knee-1].OfferedRPS, levels[knee-1].P95)
-	} else {
-		fmt.Println("knee: none (level 1 already fails)")
+		if total > 0 {
+			fmt.Printf("%-6d %-9d %.1f %%\n", l, l**stepRPS, 100*float64(bad)/float64(total))
+		}
 	}
 }
 
@@ -382,6 +316,7 @@ func readK6(path string) ([]bucket, time.Time) {
 		t       time.Time
 		dur     float64
 		status  int
+		create  bool
 		dropped bool
 	}
 	var evs []ev
@@ -405,7 +340,7 @@ func readK6(path string) ([]bucket, time.Time) {
 				continue
 			}
 			st, _ := strconv.Atoi(p.Data.Tags["status"])
-			evs = append(evs, ev{t: p.Data.Time, dur: p.Data.Value, status: st})
+			evs = append(evs, ev{t: p.Data.Time, dur: p.Data.Value, status: st, create: p.Data.Tags["kind"] == "create"})
 			if t0.IsZero() || p.Data.Time.Before(t0) {
 				t0 = p.Data.Time
 			}
@@ -434,6 +369,9 @@ func readK6(path string) ([]bucket, time.Time) {
 			b.dropped++
 		default:
 			b.durations = append(b.durations, e.dur)
+			if e.create {
+				b.creates++
+			}
 			switch {
 			case e.status == 401:
 				b.unauth++

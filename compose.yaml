@@ -1,6 +1,24 @@
-# Step 0: the naive service. One app, one Postgres, two third-party APIs (mocked).
+# Step 1: two app instances behind a load balancer, sessions in a shared store.
 # Every container below is capped at 1 CPU, so the numbers are small on purpose.
+#
+#   make up                  sessions in the shared store (the default)
+#   make up SESSIONS=memory  sessions in each app's memory: the failure this step solves
 name: shortener
+
+x-app: &app
+  build: .
+  command: app
+  cpus: 1
+  environment:
+    DATABASE_URL: postgres://shortener:shortener@db:5432/shortener?pool_max_conns=10
+    SCAN_URL: http://thirdparty:9000/scan
+    ANALYTICS_URL: http://thirdparty:9000/analytics
+    STATE_URL: redis://state:6379/0
+    SESSIONS: ${SESSIONS:-redis}
+  depends_on:
+    db: {condition: service_healthy}
+    state: {condition: service_started}
+    thirdparty: {condition: service_started}
 
 services:
   db:
@@ -16,21 +34,28 @@ services:
       timeout: 3s
       retries: 20
 
+  state:
+    image: redis:7-alpine
+    cpus: 1
+
   thirdparty:
     build: .
     command: thirdparty
     cpus: 1
     ports: ["9000:9000"]
 
-  app:
-    build: .
-    command: app
+  # The ports below are for the measuring tools (they read each app's /debug/vars); the load goes through lb.
+  app1:
+    <<: *app
+    ports: ["127.0.0.1:8091:8080"]
+  app2:
+    <<: *app
+    ports: ["127.0.0.1:8092:8080"]
+
+  lb:
+    image: haproxy:3.0-alpine
     cpus: 1
-    environment:
-      DATABASE_URL: postgres://shortener:shortener@db:5432/shortener?pool_max_conns=10
-      SCAN_URL: http://thirdparty:9000/scan
-      ANALYTICS_URL: http://thirdparty:9000/analytics
-    ports: ["${APP_PORT:-8088}:8080"]
-    depends_on:
-      db: {condition: service_healthy}
-      thirdparty: {condition: service_started}
+    volumes:
+      - ./lb/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports: ["${APP_PORT:-8088}:80"]
+    depends_on: [app1, app2]

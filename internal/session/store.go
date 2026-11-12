@@ -1,40 +1,25 @@
 // Package session keeps logged-in sessions.
 //
-// Step 0: sessions live in this process's memory.
+// Step 1: a Store is either this process's memory (Memory) or a shared store (Redis).
+// With more than one app, only the shared store works: any app must be able to serve any user.
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"sync"
 )
 
 // Store maps a session ID to the user who logged in.
-type Store struct {
-	mu    sync.RWMutex
-	users map[string]string
+type Store interface {
+	// Create starts a session for user and returns its ID.
+	Create(ctx context.Context, user string) (id string, err error)
+	// User returns the user of a session. ok is false when the session does not exist.
+	User(ctx context.Context, id string) (user string, ok bool, err error)
 }
 
-// NewMemory returns a store that keeps every session in memory.
-func NewMemory() *Store {
-	return &Store{users: map[string]string{}}
-}
-
-// Create starts a session for user and returns its ID.
-func (s *Store) Create(user string) string {
+func newID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
-	id := hex.EncodeToString(b)
-	s.mu.Lock()
-	s.users[id] = user
-	s.mu.Unlock()
-	return id
-}
-
-// User returns the user of a session, if the session exists.
-func (s *Store) User(id string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	u, ok := s.users[id]
-	return u, ok
+	return hex.EncodeToString(b)
 }

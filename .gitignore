@@ -1,5 +1,2 @@
-# Raw load-test output is large; the per-second series and the summary are what we keep.
-results/**/k6.json.gz
-results/**/cpu.jsonl
-results/**/k6.log
-results/**/.bench
+# What a demo or a load run records: the per-second series and the captured terminal output.
+results/

@@ -14,7 +14,7 @@ import (
 
 // Server wires the handlers to their dependencies.
 type Server struct {
-	Sessions *session.Store
+	Sessions session.Store
 	Links    *links.Store
 	Third    *thirdparty.Client
 }
@@ -41,7 +41,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "need a user", http.StatusBadRequest)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "sid", Value: s.Sessions.Create(in.User), Path: "/", HttpOnly: true})
+	id, err := s.Sessions.Create(r.Context(), in.User)
+	if err != nil {
+		http.Error(w, "session store down", http.StatusServiceUnavailable)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "sid", Value: id, Path: "/", HttpOnly: true})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -51,7 +56,12 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "log in first", http.StatusUnauthorized)
 		return
 	}
-	if _, ok := s.Sessions.User(c.Value); !ok {
+	_, ok, err := s.Sessions.User(r.Context(), c.Value)
+	if err != nil {
+		http.Error(w, "session store down", http.StatusServiceUnavailable)
+		return
+	}
+	if !ok {
 		http.Error(w, "unknown session", http.StatusUnauthorized)
 		return
 	}

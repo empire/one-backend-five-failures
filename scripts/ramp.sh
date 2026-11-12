@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One ramp run against whatever is up on localhost:8088.
+# One ramp run against whatever is up on localhost:8088: the load rises one level at a time until the service fails.
 #   STEP=step-0-naive RUN=1 STEP_RPS=250 STEP_S=8 LEVELS=16 scripts/ramp.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -9,13 +9,15 @@ RUN=${RUN:-1}
 STEP_RPS=${STEP_RPS:-250}
 STEP_S=${STEP_S:-10}
 LEVELS=${LEVELS:-16}
-SERVICES=${SERVICES:-app,db}
+SERVICES=${SERVICES:-app1,app2,lb,state,db}
+# Each app publishes its own /debug/vars (not through the load balancer) so the sampler can sum their counters.
+EXPVARS=${EXPVARS:-http://localhost:8091/debug/vars,http://localhost:8092/debug/vars}
 OUT="results/$STEP/run-$RUN"
 mkdir -p "$OUT"
 
 go build -o "$OUT/.bench" ./tools/bench
 
-"$OUT/.bench" sample -out "$OUT/cpu.jsonl" -services "$SERVICES" -expvar http://localhost:8088/debug/vars &
+"$OUT/.bench" sample -out "$OUT/cpu.jsonl" -services "$SERVICES" -expvar "$EXPVARS" &
 SAMPLER=$!
 trap 'kill $SAMPLER 2>/dev/null || true' EXIT
 sleep 2

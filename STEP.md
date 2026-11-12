@@ -1,20 +1,23 @@
-# Step 0: the naive service
+# Step 1: a second server, and sessions that any server can read
 
-**The idea.** A URL shortener written the obvious way, so a load test can show where it breaks.
+**The failure.** One app is one point of failure, and one CPU. A second app should help. It does not, as long as sessions live in each app's memory: you log in on one app, the next request goes to the other, and the other has never seen you (`401`).
 
-**What it has**
+**The part.** Sessions move to one shared store (Redis). A load balancer (Caddy) spreads requests over `app1` and `app2`. Any app can serve any user, so the apps hold no state of their own: a *stateless* web tier.
 
-- `POST /login` starts a session (demo only: no password). Sessions live in the app's memory.
-- `POST /links` creates a short link. It calls a safety-scan API on the spot and waits.
-- `GET /{code}` looks the link up in Postgres, calls an analytics API on the spot and waits, then answers `302`.
-- Nothing else: no cache, no limits, one app, one database.
+**What changed**
 
-**Run it**
+- `internal/session`: `Store` is now an interface, with `Memory` (this process only) and `Redis` (shared).
+- `cmd/app`: `SESSIONS=redis` (default) or `SESSIONS=memory`.
+- `compose.yaml`: `state` (Redis), `app1`, `app2`, `lb`. The load balancer is the only way in, on `localhost:8088`.
+- `lb/Caddyfile`: round robin; if an app cannot be reached, the request goes to the other one.
+
+**Run the demos**
 
 ```sh
-make up      # app, Postgres, and a mock of the two third-party APIs; each container is capped at 1 CPU
-make seed    # 100,000 links for the test to open
-make ramp    # one ramp run: the load rises one level at a time, until the service breaks
+make up SESSIONS=memory && make seed && make demo-sessions NAME=sessions-memory   # about half of the creates get a 401
+make up                 && make seed && make demo-sessions NAME=sessions-shared   # none do
+make demo-kill                                                                   # kill app2 under load
+make load                                                                        # watch it fail: now the database is the next limit
 ```
 
-The service is on `localhost:8088` (port 8080 is left free).
+**Skip it until** you want more than one server, or want to survive the loss of one.
