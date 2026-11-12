@@ -21,6 +21,9 @@ for (let l = 1; l <= LEVELS; l++) {
 
 export const options = {
   discardResponseBodies: true,
+  // k6 keeps one time series per distinct tag value. The default `url` and `name` tags would hold
+  // 100,000 of them (one per short link) and make k6 itself stall. Keep only what the analysis reads.
+  systemTags: ['status', 'method', 'scenario'],
   scenarios: {
     ramp: {
       executor: 'ramping-arrival-rate',
