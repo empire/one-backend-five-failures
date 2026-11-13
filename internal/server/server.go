@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"shortener/internal/metrics"
 	"shortener/internal/session"
 )
 
@@ -38,7 +39,8 @@ type Server struct {
 	Sessions session.Store
 	Links    Links
 	Events   Events
-	Limiter  Limiter // nil: no limit
+	Limiter  Limiter          // nil: no limit
+	Metrics  *metrics.Metrics // nil: no metrics
 }
 
 // Handler returns the routes:
@@ -46,13 +48,21 @@ type Server struct {
 //	POST /login      start a session (demo only: no password)
 //	POST /links      create a short link (needs a session)
 //	GET  /{code}     open a short link (302 to the long URL)
+//	GET  /healthz    "ok" while the app answers (the load balancer checks it)
+//	GET  /metrics    latency, traffic, errors and saturation, for a scraper
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /links", s.create)
 	mux.HandleFunc("GET /{code}", s.open)
 	mux.Handle("GET /debug/vars", expvar.Handler())
-	return mux
+	// Kept shallow on purpose: it says the app is answering. The load balancer calls it every second.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	if s.Metrics == nil {
+		return mux
+	}
+	mux.Handle("GET /metrics", s.Metrics.Handler())
+	return s.Metrics.Wrap(mux)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {

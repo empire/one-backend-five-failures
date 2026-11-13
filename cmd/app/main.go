@@ -14,6 +14,7 @@ import (
 
 	"shortener/internal/limit"
 	"shortener/internal/links"
+	"shortener/internal/metrics"
 	"shortener/internal/queue"
 	"shortener/internal/server"
 	"shortener/internal/session"
@@ -42,6 +43,7 @@ func main() {
 		Limiter:  limiter(state),
 		Links:    cached(store),
 		Events:   events,
+		Metrics:  metrics.New("POST /login", "POST /links", "GET /{code}"),
 	}
 	addr := env("LISTEN", ":8080")
 	log.Printf("listening on %s", addr)

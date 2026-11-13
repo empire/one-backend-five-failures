@@ -1,13 +1,12 @@
-STEP ?= step-4-queue
+STEP ?= step-5-metrics
 NAME ?= sessions
 RATE ?= 1000
 RUN  ?= 1
 OUT  := results/$(STEP)/run-$(RUN)
 
-.PHONY: up down seed load test demo-sessions demo-kill demo-cache demo-abuser burst demo-outage demo-dupes slow-open
+.PHONY: up down seed load test demo-sessions demo-kill demo-cache demo-abuser burst demo-outage demo-dupes slow-open demo-metrics
 
-# Two apps and a worker, the cache, the limiter. The failure this step solves is in step 3's code: run slow-open on step 3.
-# (`LIMITER=off`, `CACHE=off` and `SESSIONS=memory` bring back the failures of steps 3, 2 and 1.)
+# The whole service. (`LIMITER=off`, `CACHE=off` and `SESSIONS=memory` bring back the failures of steps 3, 2 and 1.)
 up:
 	docker compose up -d --build --wait
 
@@ -59,3 +58,7 @@ demo-outage:
 # 20 events added twice each: the worker drops the repeats. `make up DEDUPE=off` shows what happens without it.
 demo-dupes:
 	STEP=$(STEP) NAME=$(NAME) scripts/demo-dupes.sh
+
+# A short load, then what the service says about itself: /metrics and /healthz.
+demo-metrics:
+	STEP=$(STEP) scripts/demo-metrics.sh
