@@ -31,11 +31,21 @@ func demo(args []string) {
 
 	var seconds []SecondRow
 	var requests, creates, unauth, failed, dropped int
+	prev := map[string]float64{}
 	for s, b := range rows {
 		r := SecondRow{T: s, Requests: len(b.durations) + b.dropped, Creates: b.creates, OK: b.ok, Unauth: b.unauth, Throttled: b.throttled, Failed: b.failed, Dropped: b.dropped}
 		r.P50, r.P95 = pct(b.durations, 50), pct(b.durations, 95)
 		if c, ok := cpu[s]; ok {
 			r.CPU = c.cpu
+			if len(c.expvar) > 0 {
+				if len(prev) > 0 {
+					r.Counters = map[string]float64{}
+					for _, k := range counterKeys {
+						r.Counters[k] = c.expvar[k] - prev[k]
+					}
+				}
+				prev = c.expvar
+			}
 		}
 		seconds = append(seconds, r)
 		requests += r.Requests
@@ -94,6 +104,17 @@ func demo(args []string) {
 			wReq += seconds[s].Requests
 			wFail += seconds[s].Failed + seconds[s].Unauth
 		}
+		// With a cache: database lookups for every 100 opens, in the 10 seconds before the kill and from
+		// 3 seconds after it (the apps skip a dead cache for 2 seconds). Only when the apps' counters were recorded.
+		if before, ok := per100(seconds, killS-10, killS); ok {
+			out["lookups_per_100_opens_before_kill"] = before
+			if hits, ok := ratio(seconds, killS-10, killS, "cache_hits", "cache_misses"); ok {
+				out["hit_rate_pct_before_kill"] = hits
+			}
+		}
+		if after, ok := per100(seconds, killS+3, len(seconds)); ok {
+			out["lookups_per_100_opens_after_kill"] = after
+		}
 		out["kill_at_s"] = killS
 		out["kill_window_s"] = *windowS
 		out["kill_window_requests"] = wReq
@@ -111,4 +132,38 @@ func demo(args []string) {
 	writeJSON(filepath.Join(*outDir, "demo.json"), out)
 	b, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(b))
+}
+
+var counterKeys = []string{"opens", "db_lookups", "cache_hits", "cache_misses"}
+
+// per100 is the database lookups for every 100 opens over seconds [from, to).
+func per100(seconds []SecondRow, from, to int) (float64, bool) {
+	var opens, lookups float64
+	for s := max(from, 0); s < to && s < len(seconds); s++ {
+		if seconds[s].Counters == nil {
+			continue
+		}
+		opens += seconds[s].Counters["opens"]
+		lookups += seconds[s].Counters["db_lookups"]
+	}
+	if opens == 0 {
+		return 0, false
+	}
+	return round1(100 * lookups / opens), true
+}
+
+// ratio is 100 * a / (a + b) over seconds [from, to), for two counters.
+func ratio(seconds []SecondRow, from, to int, a, b string) (float64, bool) {
+	var x, y float64
+	for s := max(from, 0); s < to && s < len(seconds); s++ {
+		if seconds[s].Counters == nil {
+			continue
+		}
+		x += seconds[s].Counters[a]
+		y += seconds[s].Counters[b]
+	}
+	if x+y == 0 {
+		return 0, false
+	}
+	return round1(100 * x / (x + y)), true
 }

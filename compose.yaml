@@ -1,8 +1,9 @@
-# Step 1: two app instances behind a load balancer, sessions in a shared store.
-# Every container below is capped at 1 CPU, so the numbers are small on purpose.
+# Step 2: a cache in front of the database for opens, in its own Redis.
+# Every container below is capped at 1 CPU, so a limit shows up with a small test.
 #
-#   make up                  sessions in the shared store (the default)
-#   make up SESSIONS=memory  sessions in each app's memory: the failure this step solves
+#   make up                  cache-aside on opens (the default)
+#   make up CACHE=off        every open reads the database: the failure this step solves
+#   make up SESSIONS=memory  sessions in each app's memory (step 1's failure)
 name: shortener
 
 x-app: &app
@@ -14,10 +15,13 @@ x-app: &app
     SCAN_URL: http://thirdparty:9000/scan
     ANALYTICS_URL: http://thirdparty:9000/analytics
     STATE_URL: redis://state:6379/0
+    CACHE_URL: redis://cache:6379/0
     SESSIONS: ${SESSIONS:-redis}
+    CACHE: ${CACHE:-redis}
   depends_on:
     db: {condition: service_healthy}
     state: {condition: service_started}
+    cache: {condition: service_started}
     thirdparty: {condition: service_started}
 
 services:
@@ -37,6 +41,13 @@ services:
   state:
     image: redis:7-alpine
     cpus: 1
+
+  # Only copies of rows that are also in the database. It is set to forget: 64 MB, least recently used first.
+  # It is not the state store above, which holds sessions that exist nowhere else.
+  cache:
+    image: redis:7-alpine
+    cpus: 1
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
 
   thirdparty:
     build: .

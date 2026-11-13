@@ -18,10 +18,11 @@ export function login() {
   return {cookies};
 }
 
-// Popular links are opened far more often than the rest (a heavy head and a long tail).
+// A few links are opened far more than the rest: 9 opens in 10 go to the first HOT links, the others to any link.
+const HOT = Number(__ENV.HOT || 1000);
 function pickCode() {
-  const i = 1 + Math.floor(CODES * Math.pow(Math.random(), 3));
-  return 's' + String(Math.min(i, CODES)).padStart(6, '0');
+  const range = Math.random() < 0.9 ? HOT : CODES;
+  return 's' + String(1 + Math.floor(Math.random() * range)).padStart(6, '0');
 }
 
 // One request: a create one time in eleven, an open otherwise.

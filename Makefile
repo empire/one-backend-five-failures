@@ -1,13 +1,13 @@
-STEP ?= step-1-stateless
+STEP ?= step-2-cache
 NAME ?= sessions
 RATE ?= 1000
 RUN  ?= 1
 OUT  := results/$(STEP)/run-$(RUN)
 
-.PHONY: up down seed load test demo-sessions demo-kill
+.PHONY: up down seed load test demo-sessions demo-kill demo-cache
 
-# Two apps behind a load balancer. `make up SESSIONS=memory` keeps sessions in each app's memory,
-# which is the failure this step solves.
+# Two apps behind a load balancer, with a cache for opens. `make up CACHE=off` reads the database for every open,
+# which is the failure this step solves. `make up SESSIONS=memory` keeps sessions in each app's memory (step 1's failure).
 up:
 	docker compose up -d --build --wait
 
@@ -34,3 +34,7 @@ demo-sessions:
 # Steady load while app2 is killed; prints how many requests failed and how long the slow end stayed slow.
 demo-kill:
 	STEP=$(STEP) NAME=kill KILL=app2 RATE=$(RATE) DURATION_S=45 KILL_AFTER_S=15 scripts/demo.sh
+
+# Steady load while the cache is killed: database lookups for every 100 opens, before and after.
+demo-cache:
+	STEP=$(STEP) NAME=cache-kill KILL=cache RATE=500 DURATION_S=50 KILL_AFTER_S=25 scripts/demo.sh

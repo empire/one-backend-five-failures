@@ -27,7 +27,7 @@ func main() {
 
 	srv := &server.Server{
 		Sessions: sessions(),
-		Links:    store,
+		Links:    cached(store),
 		Third:    thirdparty.New(env("SCAN_URL", "http://localhost:9000/scan"), env("ANALYTICS_URL", "http://localhost:9000/analytics")),
 	}
 	addr := env("LISTEN", ":8080")
@@ -47,6 +47,26 @@ func sessions() session.Store {
 	}
 	log.Print("sessions: in the shared state store")
 	return session.NewRedis(redis.NewClient(opt))
+}
+
+// cached puts the cache in front of the database: CACHE=redis (default) or CACHE=off.
+func cached(store *links.Store) server.Links {
+	if os.Getenv("CACHE") == "off" {
+		log.Print("cache: off, every open reads the database")
+		return store
+	}
+	opt, err := redis.ParseURL(env("CACHE_URL", "redis://localhost:6380/0"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	// A cache that is slow is worse than none: give up fast, and let the database answer.
+	opt.DialTimeout, opt.ReadTimeout, opt.WriteTimeout = 100*time.Millisecond, 100*time.Millisecond, 100*time.Millisecond
+	opt.MaxRetries = -1
+	c := links.NewCached(store, links.NewRedisCache(redis.NewClient(opt)), 5*time.Minute)
+	expvar.Publish("cache_hits", expvar.Func(func() any { h, _ := c.Stats(); return h }))
+	expvar.Publish("cache_misses", expvar.Func(func() any { _, m := c.Stats(); return m }))
+	log.Print("cache: cache-aside in a separate Redis")
+	return c
 }
 
 func env(key, fallback string) string {

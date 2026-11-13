@@ -243,6 +243,8 @@ type SecondRow struct {
 	P95       float64            `json:"p95_ms"`
 	CPU       map[string]float64 `json:"cpu,omitempty"`
 	DBQPS     float64            `json:"db_qps,omitempty"`
+	// What each counter in /debug/vars grew by this second (opens, db_lookups, cache_hits, cache_misses), summed over the apps.
+	Counters map[string]float64 `json:"counters,omitempty"`
 }
 
 func series(args []string) {

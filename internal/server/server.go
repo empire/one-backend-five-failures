@@ -2,20 +2,28 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"expvar"
 	"net/http"
 	"net/url"
 
-	"shortener/internal/links"
 	"shortener/internal/session"
 	"shortener/internal/thirdparty"
 )
 
+// Links is where short links are saved and found: the database, or the database behind a cache.
+type Links interface {
+	Create(ctx context.Context, url string) (string, error)
+	Lookup(ctx context.Context, code string) (url string, ok bool, err error)
+}
+
+var opens = expvar.NewInt("opens") // opens answered, shown at /debug/vars
+
 // Server wires the handlers to their dependencies.
 type Server struct {
 	Sessions session.Store
-	Links    *links.Store
+	Links    Links
 	Third    *thirdparty.Client
 }
 
@@ -97,6 +105,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) open(w http.ResponseWriter, r *http.Request) {
+	opens.Add(1)
 	code := r.PathValue("code")
 	long, ok, err := s.Links.Lookup(r.Context(), code)
 	if err != nil {

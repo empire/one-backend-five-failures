@@ -2,6 +2,7 @@
 # A steady run at RATE requests per second, optionally killing one app part-way through.
 #   STEP=step-1-stateless NAME=sessions-memory RATE=1000 DURATION_S=30 scripts/demo.sh
 #   STEP=step-1-stateless NAME=kill KILL=app2 KILL_AFTER_S=15 RATE=1000 DURATION_S=45 scripts/demo.sh
+#   STEP=step-2-cache NAME=cache-kill KILL=cache KILL_AFTER_S=25 RATE=500 DURATION_S=50 scripts/demo.sh
 # Output: results/$STEP/$NAME/run-1/{demo.json,series.json,kill.txt}
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,7 +14,8 @@ DURATION_S=${DURATION_S:-40}
 KILL=${KILL:-}                  # compose service to kill, e.g. app2
 KILL_AFTER_S=${KILL_AFTER_S:-15}
 WINDOW_S=${WINDOW_S:-10}
-SERVICES=${SERVICES:-app1,app2,lb,state,db}
+SERVICES=${SERVICES:-app1,app2,lb,state,cache,db}
+EXPVARS=${EXPVARS:-http://localhost:8091/debug/vars,http://localhost:8092/debug/vars}
 DIR="results/$STEP/$NAME"
 mkdir -p "$DIR"
 go build -o "$DIR/.bench" ./tools/bench
@@ -23,7 +25,7 @@ one_run() {
   mkdir -p "$out"
   rm -f "$out/kill.txt" "$out/kill.at"
 
-  "$DIR/.bench" sample -out "$out/cpu.jsonl" -services "$SERVICES" &
+  "$DIR/.bench" sample -out "$out/cpu.jsonl" -services "$SERVICES" -expvar "$EXPVARS" &
   local sampler=$!
   sleep 2
 
