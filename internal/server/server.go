@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"expvar"
 	"net/http"
@@ -11,13 +12,18 @@ import (
 	"time"
 
 	"shortener/internal/session"
-	"shortener/internal/thirdparty"
 )
 
 // Links is where short links are saved and found: the database, or the database behind a cache.
 type Links interface {
 	Create(ctx context.Context, url string) (string, error)
 	Lookup(ctx context.Context, code string) (url string, ok bool, err error)
+	Delete(ctx context.Context, code string) error
+}
+
+// Events is the queue: work that can wait is added here and done later by the worker.
+type Events interface {
+	Publish(ctx context.Context, lane, id string, fields map[string]string) error
 }
 
 // Limiter says whether a client may make another request now, or how long it must wait.
@@ -31,7 +37,7 @@ var opens = expvar.NewInt("opens") // opens answered, shown at /debug/vars
 type Server struct {
 	Sessions session.Store
 	Links    Links
-	Third    *thirdparty.Client
+	Events   Events
 	Limiter  Limiter // nil: no limit
 }
 
@@ -95,19 +101,16 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "need an http(s) URL", http.StatusBadRequest)
 		return
 	}
-	// Called on the spot: this request waits for the scan.
-	safe, err := s.Third.Scan(r.Context(), in.URL)
-	if err != nil {
-		http.Error(w, "scan failed", http.StatusBadGateway)
-		return
-	}
-	if !safe {
-		http.Error(w, "URL is not safe", http.StatusUnprocessableEntity)
-		return
-	}
 	code, err := s.Links.Create(r.Context(), in.URL)
 	if err != nil {
 		http.Error(w, "could not save", http.StatusInternalServerError)
+		return
+	}
+	// The safety scan can wait: queue it and answer. The worker scans the URL and removes the link if it is not safe.
+	// The scan must not be lost, so if it cannot be queued, the link is not kept.
+	if err := s.Events.Publish(r.Context(), "scan", "scan-"+code, map[string]string{"code": code, "url": in.URL}); err != nil {
+		_ = s.Links.Delete(r.Context(), code)
+		http.Error(w, "queue unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -142,8 +145,8 @@ func (s *Server) open(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// Called on the spot: this request waits for analytics, and ignores its errors.
-	_ = s.Third.Click(r.Context(), code)
+	// Analytics can wait: queue the click and answer. If the queue is down the click is lost, and the open still works.
+	_ = s.Events.Publish(r.Context(), "click", rand.Text(), map[string]string{"code": code})
 	// 302, not 301: a 301 is cached by the browser, so later opens would never reach us.
 	http.Redirect(w, r, long, http.StatusFound)
 }

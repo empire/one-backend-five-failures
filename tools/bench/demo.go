@@ -43,7 +43,17 @@ func demo(args []string) {
 				if len(prev) > 0 {
 					r.Counters = map[string]float64{}
 					for _, k := range counterKeys {
-						r.Counters[k] = c.expvar[k] - prev[k]
+						if v, ok := c.expvar[k]; ok {
+							r.Counters[k] = v - prev[k]
+						}
+					}
+				}
+				for _, k := range gaugeKeys {
+					if v, ok := c.expvar[k]; ok {
+						if r.Gauges == nil {
+							r.Gauges = map[string]float64{}
+						}
+						r.Gauges[k] = v
 					}
 				}
 				prev = c.expvar
@@ -150,7 +160,10 @@ func demo(args []string) {
 	fmt.Println(string(b))
 }
 
-var counterKeys = []string{"opens", "db_lookups", "cache_hits", "cache_misses"}
+// counterKeys grow over a run (the apps' and the worker's /debug/vars); gaugeKeys are levels.
+var counterKeys = []string{"opens", "db_lookups", "cache_hits", "cache_misses",
+	"events_click", "events_scan", "done_click", "done_scan", "retries_click", "retries_scan", "dropped_click", "dropped_scan"}
+var gaugeKeys = []string{"queue_click", "queue_scan"}
 
 // per100 is the database lookups for every 100 opens over seconds [from, to).
 func per100(seconds []SecondRow, from, to int) (float64, bool) {

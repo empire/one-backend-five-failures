@@ -67,6 +67,12 @@ func (s *Store) Lookup(ctx context.Context, code string) (url string, ok bool, e
 	return url, err == nil, err
 }
 
+// Delete removes a link. It is not an error if the code does not exist.
+func (s *Store) Delete(ctx context.Context, code string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM links WHERE code = $1`, code)
+	return err
+}
+
 // Lookups returns how many database reads have started.
 func (s *Store) Lookups() int64 { return s.lookups.Load() }
 

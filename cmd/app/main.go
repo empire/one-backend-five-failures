@@ -14,9 +14,9 @@ import (
 
 	"shortener/internal/limit"
 	"shortener/internal/links"
+	"shortener/internal/queue"
 	"shortener/internal/server"
 	"shortener/internal/session"
-	"shortener/internal/thirdparty"
 )
 
 func main() {
@@ -27,12 +27,21 @@ func main() {
 	}
 	expvar.Publish("db_lookups", expvar.Func(func() any { return store.Lookups() }))
 
-	sess := sessions()
+	opt, err := redis.ParseURL(env("STATE_URL", "redis://localhost:6379/0"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	state := redis.NewClient(opt) // sessions, limiter buckets and the queue all live here
+
+	events := queue.NewProducer(state, "click", "scan")
+	expvar.Publish("events_click", expvar.Func(func() any { return events.Published("click") }))
+	expvar.Publish("events_scan", expvar.Func(func() any { return events.Published("scan") }))
+
 	srv := &server.Server{
-		Sessions: sess,
-		Limiter:  limiter(),
+		Sessions: sessions(state),
+		Limiter:  limiter(state),
 		Links:    cached(store),
-		Third:    thirdparty.New(env("SCAN_URL", "http://localhost:9000/scan"), env("ANALYTICS_URL", "http://localhost:9000/analytics")),
+		Events:   events,
 	}
 	addr := env("LISTEN", ":8080")
 	log.Printf("listening on %s", addr)
@@ -40,17 +49,25 @@ func main() {
 }
 
 // sessions picks where logged-in sessions live: SESSIONS=redis (default) or SESSIONS=memory.
-func sessions() session.Store {
+func sessions(state *redis.Client) session.Store {
 	if os.Getenv("SESSIONS") == "memory" {
 		log.Print("sessions: in this process's memory")
 		return session.NewMemory()
 	}
-	opt, err := redis.ParseURL(env("STATE_URL", "redis://localhost:6379/0"))
-	if err != nil {
-		log.Fatal(err)
-	}
 	log.Print("sessions: in the shared state store")
-	return session.NewRedis(redis.NewClient(opt))
+	return session.NewRedis(state)
+}
+
+// limiter keeps one token bucket per client in the state store: LIMITER=on (default) or LIMITER=off.
+func limiter(state *redis.Client) server.Limiter {
+	if os.Getenv("LIMITER") == "off" {
+		log.Print("limiter: off")
+		return nil
+	}
+	size, _ := strconv.Atoi(env("BUCKET_SIZE", "10"))
+	refill, _ := strconv.ParseFloat(env("REFILL_PER_S", "2"), 64)
+	log.Printf("limiter: token bucket in the state store, %d tokens, %g new tokens a second", size, refill)
+	return limit.New(state, size, refill)
 }
 
 // cached puts the cache in front of the database: CACHE=redis (default) or CACHE=off.
@@ -59,34 +76,15 @@ func cached(store *links.Store) server.Links {
 		log.Print("cache: off, every open reads the database")
 		return store
 	}
-	opt, err := redis.ParseURL(env("CACHE_URL", "redis://localhost:6380/0"))
+	cache, err := links.OpenRedisCache(env("CACHE_URL", "redis://localhost:6380/0"))
 	if err != nil {
 		log.Fatal(err)
 	}
-	// A cache that is slow is worse than none: give up fast, and let the database answer.
-	opt.DialTimeout, opt.ReadTimeout, opt.WriteTimeout = 100*time.Millisecond, 100*time.Millisecond, 100*time.Millisecond
-	opt.MaxRetries = -1
-	c := links.NewCached(store, links.NewRedisCache(redis.NewClient(opt)), 5*time.Minute)
+	c := links.NewCached(store, cache, 5*time.Minute)
 	expvar.Publish("cache_hits", expvar.Func(func() any { h, _ := c.Stats(); return h }))
 	expvar.Publish("cache_misses", expvar.Func(func() any { _, m := c.Stats(); return m }))
 	log.Print("cache: cache-aside in a separate Redis")
 	return c
-}
-
-// limiter keeps one token bucket per client in the shared state store: LIMITER=on (default) or LIMITER=off.
-func limiter() server.Limiter {
-	if os.Getenv("LIMITER") == "off" {
-		log.Print("limiter: off")
-		return nil
-	}
-	opt, err := redis.ParseURL(env("STATE_URL", "redis://localhost:6379/0"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	size, _ := strconv.Atoi(env("BUCKET_SIZE", "10"))
-	refill, _ := strconv.ParseFloat(env("REFILL_PER_S", "2"), 64)
-	log.Printf("limiter: token bucket in the state store, %d tokens, %g new tokens a second", size, refill)
-	return limit.New(redis.NewClient(opt), size, refill)
 }
 
 func env(key, fallback string) string {

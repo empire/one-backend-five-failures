@@ -7,7 +7,7 @@
 //
 //	POST /admin/slow?api=analytics&ms=3000   answer after this many milliseconds
 //	POST /admin/fail?api=analytics&pct=30    answer 500 for this share of calls
-//	GET  /admin/stats                        calls received per API
+//	GET  /admin/stats                        calls received per API, and how many events each one delivered (and how many twice)
 package main
 
 import (
@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -26,6 +27,11 @@ type api struct {
 	failPct  atomic.Int64
 	received atomic.Int64
 	failed   atomic.Int64
+
+	// Calls that succeeded, by the event ID they carried (header X-Event-ID).
+	delivered  atomic.Int64 // succeeded with an ID not seen before
+	duplicates atomic.Int64 // succeeded with an ID that had already succeeded
+	seen       sync.Map
 }
 
 func (a *api) handle(body any) http.HandlerFunc {
@@ -36,6 +42,13 @@ func (a *api) handle(body any) http.HandlerFunc {
 			a.failed.Add(1)
 			http.Error(w, "mock failure", http.StatusInternalServerError)
 			return
+		}
+		if id := r.Header.Get("X-Event-ID"); id != "" {
+			if _, again := a.seen.LoadOrStore(id, true); again {
+				a.duplicates.Add(1)
+			} else {
+				a.delivered.Add(1)
+			}
 		}
 		if body == nil {
 			w.WriteHeader(http.StatusNoContent)
@@ -68,7 +81,7 @@ func main() {
 	mux.HandleFunc("GET /admin/stats", func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]map[string]int64{}
 		for name, a := range apis {
-			out[name] = map[string]int64{"received": a.received.Load(), "failed": a.failed.Load(), "delay_ms": a.delayMS.Load(), "fail_pct": a.failPct.Load()}
+			out[name] = map[string]int64{"received": a.received.Load(), "failed": a.failed.Load(), "delivered": a.delivered.Load(), "duplicates": a.duplicates.Load(), "delay_ms": a.delayMS.Load(), "fail_pct": a.failPct.Load()}
 		}
 		_ = json.NewEncoder(w).Encode(out)
 	})

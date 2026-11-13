@@ -1,13 +1,13 @@
-STEP ?= step-3-ratelimit
+STEP ?= step-4-queue
 NAME ?= sessions
 RATE ?= 1000
 RUN  ?= 1
 OUT  := results/$(STEP)/run-$(RUN)
 
-.PHONY: up down seed load test demo-sessions demo-kill demo-cache demo-abuser burst
+.PHONY: up down seed load test demo-sessions demo-kill demo-cache demo-abuser burst demo-outage demo-dupes slow-open
 
-# Two apps behind a load balancer, a cache for opens, and a limiter on creates. `make up LIMITER=off` removes the limit,
-# which is the failure this step solves. (`CACHE=off` and `SESSIONS=memory` bring back the failures of steps 2 and 1.)
+# Two apps and a worker, the cache, the limiter. The failure this step solves is in step 3's code: run slow-open on step 3.
+# (`LIMITER=off`, `CACHE=off` and `SESSIONS=memory` bring back the failures of steps 3, 2 and 1.)
 up:
 	docker compose up -d --build --wait
 
@@ -47,3 +47,15 @@ demo-abuser:
 # A quiet client sends a burst of creates: the first ones pass, then 429 with Retry-After.
 burst:
 	STEP=$(STEP) scripts/burst.sh
+
+# One open while the analytics API is slow (run it on step 3 and on this step to see the difference).
+slow-open:
+	STEP=$(STEP) scripts/slow-open.sh
+
+# Steady load; the analytics API fails every call for 20 seconds. Prints what was queued, delivered and lost.
+demo-outage:
+	STEP=$(STEP) scripts/demo-outage.sh
+
+# 20 events added twice each: the worker drops the repeats. `make up DEDUPE=off` shows what happens without it.
+demo-dupes:
+	STEP=$(STEP) NAME=$(NAME) scripts/demo-dupes.sh

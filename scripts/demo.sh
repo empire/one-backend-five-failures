@@ -16,8 +16,8 @@ SCRIPT=${SCRIPT:-steady.js}     # steady.js, or abuser.js for the noisy-client r
 KILL=${KILL:-}                  # compose service to kill, e.g. app2
 KILL_AFTER_S=${KILL_AFTER_S:-15}
 WINDOW_S=${WINDOW_S:-10}
-SERVICES=${SERVICES:-app1,app2,lb,state,cache,db}
-EXPVARS=${EXPVARS:-http://localhost:8091/debug/vars,http://localhost:8092/debug/vars}
+SERVICES=${SERVICES:-app1,app2,lb,state,cache,db,worker}
+EXPVARS=${EXPVARS:-http://localhost:8091/debug/vars,http://localhost:8092/debug/vars,http://localhost:8093/debug/vars}
 DIR="results/$STEP/$NAME"
 mkdir -p "$DIR"
 go build -o "$DIR/.bench" ./tools/bench

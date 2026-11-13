@@ -13,6 +13,7 @@ type fakeDB struct {
 }
 
 func (d *fakeDB) Create(_ context.Context, url string) (string, error) { return "new", nil }
+func (d *fakeDB) Delete(_ context.Context, code string) error          { delete(d.rows, code); return nil }
 func (d *fakeDB) Lookup(_ context.Context, code string) (string, bool, error) {
 	d.lookups++
 	url, ok := d.rows[code]
@@ -41,6 +42,8 @@ func (c *fakeCache) Set(_ context.Context, key, value string, _ time.Duration) e
 	c.m[key] = value
 	return nil
 }
+
+func (c *fakeCache) Del(_ context.Context, key string) error { delete(c.m, key); return nil }
 
 func setup() (*Cached, *fakeDB, *fakeCache) {
 	db := &fakeDB{rows: map[string]string{"abc": "https://example.com"}}
@@ -103,5 +106,19 @@ func TestCacheIsUsedAgainAfterItRecovers(t *testing.T) {
 	_, _, _ = c.Lookup(context.Background(), "abc")
 	if hits, _ := c.Stats(); hits != 1 {
 		t.Errorf("hits = %d, want 1", hits)
+	}
+}
+
+func TestDeleteRemovesTheLinkAndItsCachedCopy(t *testing.T) {
+	c, _, cache := setup()
+	_, _, _ = c.Lookup(context.Background(), "abc") // now cached
+	if err := c.Delete(context.Background(), "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := c.Lookup(context.Background(), "abc"); ok {
+		t.Error("a deleted link is still found")
+	}
+	if len(cache.m) != 0 {
+		t.Error("the cached copy is still there")
 	}
 }

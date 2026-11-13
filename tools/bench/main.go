@@ -251,6 +251,8 @@ type SecondRow struct {
 	AbuserThrottled int `json:"abuser_throttled,omitempty"`
 	// What each counter in /debug/vars grew by this second (opens, db_lookups, cache_hits, cache_misses), summed over the apps.
 	Counters map[string]float64 `json:"counters,omitempty"`
+	// Levels that are read as they are, not as growth: how many events wait in each lane of the queue.
+	Gauges map[string]float64 `json:"gauges,omitempty"`
 }
 
 func series(args []string) {

@@ -4,6 +4,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/app ./cmd/app \
+ && CGO_ENABLED=0 go build -o /out/worker ./cmd/worker \
  && CGO_ENABLED=0 go build -o /out/thirdparty ./cmd/thirdparty
 
 FROM alpine:3

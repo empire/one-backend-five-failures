@@ -9,9 +9,9 @@ RUN=${RUN:-1}
 STEP_RPS=${STEP_RPS:-250}
 STEP_S=${STEP_S:-10}
 LEVELS=${LEVELS:-16}
-SERVICES=${SERVICES:-app1,app2,lb,state,cache,db}
+SERVICES=${SERVICES:-app1,app2,lb,state,cache,db,worker}
 # Each app publishes its own /debug/vars (not through the load balancer) so the sampler can sum their counters.
-EXPVARS=${EXPVARS:-http://localhost:8091/debug/vars,http://localhost:8092/debug/vars}
+EXPVARS=${EXPVARS:-http://localhost:8091/debug/vars,http://localhost:8092/debug/vars,http://localhost:8093/debug/vars}
 OUT="results/$STEP/run-$RUN"
 mkdir -p "$OUT"
 
