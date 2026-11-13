@@ -5,16 +5,19 @@ export const BASE = __ENV.BASE || 'http://localhost:8088';
 const CODES = Number(__ENV.CODES || 100000); // seeded by scripts/seed.sql
 const USERS = Number(__ENV.USERS || 50);
 
+// Log one client in and return its session cookie.
+export function loginAs(user) {
+  const res = http.post(`${BASE}/login`, JSON.stringify({user}), {
+    headers: {'Content-Type': 'application/json'},
+    tags: {kind: 'login'},
+  });
+  return res.cookies.sid[0].value;
+}
+
 // Log in USERS clients once. Creates need a session; opens do not.
 export function login() {
   const cookies = [];
-  for (let i = 0; i < USERS; i++) {
-    const res = http.post(`${BASE}/login`, JSON.stringify({user: `user${i}`}), {
-      headers: {'Content-Type': 'application/json'},
-      tags: {kind: 'login'},
-    });
-    cookies.push(res.cookies.sid[0].value);
-  }
+  for (let i = 0; i < USERS; i++) cookies.push(loginAs(`user${i}`));
   return {cookies};
 }
 

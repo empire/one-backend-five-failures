@@ -226,6 +226,8 @@ type bucket struct {
 	durations                              []float64
 	ok, unauth, throttled, failed, dropped int
 	creates                                int // requests of kind "create" (the ones that need a session)
+	// The one abuser (scenario "abuser") is counted apart from the normal clients.
+	abuser, abuserOK, abuserThrottled, abuserFailed int
 }
 
 // SecondRow is one second of one run, as the video reads it.
@@ -243,6 +245,10 @@ type SecondRow struct {
 	P95       float64            `json:"p95_ms"`
 	CPU       map[string]float64 `json:"cpu,omitempty"`
 	DBQPS     float64            `json:"db_qps,omitempty"`
+	// The abuser's creates in this second, when there is one: sent, accepted (201), turned away (429).
+	Abuser          int `json:"abuser,omitempty"`
+	AbuserOK        int `json:"abuser_ok,omitempty"`
+	AbuserThrottled int `json:"abuser_throttled,omitempty"`
 	// What each counter in /debug/vars grew by this second (opens, db_lookups, cache_hits, cache_misses), summed over the apps.
 	Counters map[string]float64 `json:"counters,omitempty"`
 }
@@ -319,6 +325,7 @@ func readK6(path string) ([]bucket, time.Time) {
 		dur     float64
 		status  int
 		create  bool
+		abuser  bool
 		dropped bool
 	}
 	var evs []ev
@@ -342,7 +349,7 @@ func readK6(path string) ([]bucket, time.Time) {
 				continue
 			}
 			st, _ := strconv.Atoi(p.Data.Tags["status"])
-			evs = append(evs, ev{t: p.Data.Time, dur: p.Data.Value, status: st, create: p.Data.Tags["kind"] == "create"})
+			evs = append(evs, ev{t: p.Data.Time, dur: p.Data.Value, status: st, create: p.Data.Tags["kind"] == "create", abuser: p.Data.Tags["scenario"] == "abuser"})
 			if t0.IsZero() || p.Data.Time.Before(t0) {
 				t0 = p.Data.Time
 			}
@@ -369,6 +376,16 @@ func readK6(path string) ([]bucket, time.Time) {
 		switch {
 		case e.dropped:
 			b.dropped++
+		case e.abuser:
+			b.abuser++
+			switch {
+			case e.status == 201:
+				b.abuserOK++
+			case e.status == 429:
+				b.abuserThrottled++
+			default:
+				b.abuserFailed++
+			}
 		default:
 			b.durations = append(b.durations, e.dur)
 			if e.create {

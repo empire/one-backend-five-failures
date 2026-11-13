@@ -1,13 +1,13 @@
-STEP ?= step-2-cache
+STEP ?= step-3-ratelimit
 NAME ?= sessions
 RATE ?= 1000
 RUN  ?= 1
 OUT  := results/$(STEP)/run-$(RUN)
 
-.PHONY: up down seed load test demo-sessions demo-kill demo-cache
+.PHONY: up down seed load test demo-sessions demo-kill demo-cache demo-abuser burst
 
-# Two apps behind a load balancer, with a cache for opens. `make up CACHE=off` reads the database for every open,
-# which is the failure this step solves. `make up SESSIONS=memory` keeps sessions in each app's memory (step 1's failure).
+# Two apps behind a load balancer, a cache for opens, and a limiter on creates. `make up LIMITER=off` removes the limit,
+# which is the failure this step solves. (`CACHE=off` and `SESSIONS=memory` bring back the failures of steps 2 and 1.)
 up:
 	docker compose up -d --build --wait
 
@@ -38,3 +38,12 @@ demo-kill:
 # Steady load while the cache is killed: database lookups for every 100 opens, before and after.
 demo-cache:
 	STEP=$(STEP) NAME=cache-kill KILL=cache RATE=500 DURATION_S=50 KILL_AFTER_S=25 scripts/demo.sh
+
+# Normal clients plus one that creates links in a loop; prints how much of each gets through.
+# Run it twice: `make up LIMITER=off` then `make demo-abuser NAME=abuser-off`, and `make up` then `make demo-abuser NAME=abuser-on`.
+demo-abuser:
+	STEP=$(STEP) NAME=$(NAME) SCRIPT=abuser.js RATE=550 ABUSER_RPS=20 DURATION_S=30 scripts/demo.sh
+
+# A quiet client sends a burst of creates: the first ones pass, then 429 with Retry-After.
+burst:
+	STEP=$(STEP) scripts/burst.sh

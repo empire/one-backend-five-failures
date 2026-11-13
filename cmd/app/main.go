@@ -7,10 +7,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
+	"shortener/internal/limit"
 	"shortener/internal/links"
 	"shortener/internal/server"
 	"shortener/internal/session"
@@ -25,8 +27,10 @@ func main() {
 	}
 	expvar.Publish("db_lookups", expvar.Func(func() any { return store.Lookups() }))
 
+	sess := sessions()
 	srv := &server.Server{
-		Sessions: sessions(),
+		Sessions: sess,
+		Limiter:  limiter(),
 		Links:    cached(store),
 		Third:    thirdparty.New(env("SCAN_URL", "http://localhost:9000/scan"), env("ANALYTICS_URL", "http://localhost:9000/analytics")),
 	}
@@ -67,6 +71,22 @@ func cached(store *links.Store) server.Links {
 	expvar.Publish("cache_misses", expvar.Func(func() any { _, m := c.Stats(); return m }))
 	log.Print("cache: cache-aside in a separate Redis")
 	return c
+}
+
+// limiter keeps one token bucket per client in the shared state store: LIMITER=on (default) or LIMITER=off.
+func limiter() server.Limiter {
+	if os.Getenv("LIMITER") == "off" {
+		log.Print("limiter: off")
+		return nil
+	}
+	opt, err := redis.ParseURL(env("STATE_URL", "redis://localhost:6379/0"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	size, _ := strconv.Atoi(env("BUCKET_SIZE", "10"))
+	refill, _ := strconv.ParseFloat(env("REFILL_PER_S", "2"), 64)
+	log.Printf("limiter: token bucket in the state store, %d tokens, %g new tokens a second", size, refill)
+	return limit.New(redis.NewClient(opt), size, refill)
 }
 
 func env(key, fallback string) string {

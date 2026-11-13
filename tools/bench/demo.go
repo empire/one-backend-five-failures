@@ -30,10 +30,12 @@ func demo(args []string) {
 	cpu := readCPU(*cpuPath, t0)
 
 	var seconds []SecondRow
-	var requests, creates, unauth, failed, dropped int
+	var requests, creates, unauth, failed, dropped, throttled int
+	var abuser, abuserOK, abuserThrottled int
 	prev := map[string]float64{}
 	for s, b := range rows {
-		r := SecondRow{T: s, Requests: len(b.durations) + b.dropped, Creates: b.creates, OK: b.ok, Unauth: b.unauth, Throttled: b.throttled, Failed: b.failed, Dropped: b.dropped}
+		r := SecondRow{T: s, Requests: len(b.durations) + b.dropped, Creates: b.creates, OK: b.ok, Unauth: b.unauth, Throttled: b.throttled, Failed: b.failed, Dropped: b.dropped,
+			Abuser: b.abuser, AbuserOK: b.abuserOK, AbuserThrottled: b.abuserThrottled}
 		r.P50, r.P95 = pct(b.durations, 50), pct(b.durations, 95)
 		if c, ok := cpu[s]; ok {
 			r.CPU = c.cpu
@@ -53,6 +55,10 @@ func demo(args []string) {
 		unauth += b.unauth
 		failed += b.failed
 		dropped += b.dropped
+		throttled += b.throttled
+		abuser += b.abuser
+		abuserOK += b.abuserOK
+		abuserThrottled += b.abuserThrottled
 	}
 
 	out := map[string]any{
@@ -64,6 +70,16 @@ func demo(args []string) {
 	}
 	if creates > 0 {
 		out["unauth_pct_of_creates"] = round1(100 * float64(unauth) / float64(creates))
+	}
+	if abuser > 0 { // a run with the abuser: how much of its stream got through, and how much of a normal client's
+		out["abuser_creates"] = abuser
+		out["abuser_accepted_pct"] = round1(100 * float64(abuserOK) / float64(abuser))
+		out["abuser_429_pct"] = round1(100 * float64(abuserThrottled) / float64(abuser))
+		out["normal_creates"] = creates
+		out["normal_429"] = throttled
+		if creates > 0 {
+			out["normal_429_pct"] = round1(100 * float64(throttled) / float64(creates))
+		}
 	}
 
 	if *killFile != "" {

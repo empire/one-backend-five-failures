@@ -23,7 +23,7 @@ trap 'kill $SAMPLER 2>/dev/null || true' EXIT
 sleep 2
 
 docker run --rm --network host --user "$(id -u):$(id -g)" \
-  -e STEP_RPS="$STEP_RPS" -e STEP_S="$STEP_S" -e LEVELS="$LEVELS" \
+  -e USERS="${USERS:-50}" -e STEP_RPS="$STEP_RPS" -e STEP_S="$STEP_S" -e LEVELS="$LEVELS" \
   -v "$PWD/loadtest:/scripts:ro" -v "$PWD/$OUT:/out" \
   grafana/k6 run --quiet --out json=/out/k6.json.gz /scripts/ramp.js > "$OUT/k6.log" 2>&1 || true
 

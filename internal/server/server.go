@@ -7,6 +7,8 @@ import (
 	"expvar"
 	"net/http"
 	"net/url"
+	"strconv"
+	"time"
 
 	"shortener/internal/session"
 	"shortener/internal/thirdparty"
@@ -18,6 +20,11 @@ type Links interface {
 	Lookup(ctx context.Context, code string) (url string, ok bool, err error)
 }
 
+// Limiter says whether a client may make another request now, or how long it must wait.
+type Limiter interface {
+	Allow(ctx context.Context, client string) (ok bool, wait time.Duration, err error)
+}
+
 var opens = expvar.NewInt("opens") // opens answered, shown at /debug/vars
 
 // Server wires the handlers to their dependencies.
@@ -25,6 +32,7 @@ type Server struct {
 	Sessions session.Store
 	Links    Links
 	Third    *thirdparty.Client
+	Limiter  Limiter // nil: no limit
 }
 
 // Handler returns the routes:
@@ -64,13 +72,16 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "log in first", http.StatusUnauthorized)
 		return
 	}
-	_, ok, err := s.Sessions.User(r.Context(), c.Value)
+	user, ok, err := s.Sessions.User(r.Context(), c.Value)
 	if err != nil {
 		http.Error(w, "session store down", http.StatusServiceUnavailable)
 		return
 	}
 	if !ok {
 		http.Error(w, "unknown session", http.StatusUnauthorized)
+		return
+	}
+	if s.tooMany(w, r, user) {
 		return
 	}
 	var in struct {
@@ -102,6 +113,21 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]string{"code": code})
+}
+
+// tooMany answers 429 with a Retry-After header when the client has used its tokens.
+// If the limiter itself fails, the request goes through: a broken limiter must not take the service down.
+func (s *Server) tooMany(w http.ResponseWriter, r *http.Request, client string) bool {
+	if s.Limiter == nil {
+		return false
+	}
+	ok, wait, err := s.Limiter.Allow(r.Context(), client)
+	if err != nil || ok {
+		return false
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(max(1, int((wait+time.Second-1)/time.Second))))
+	http.Error(w, "too many requests", http.StatusTooManyRequests)
+	return true
 }
 
 func (s *Server) open(w http.ResponseWriter, r *http.Request) {

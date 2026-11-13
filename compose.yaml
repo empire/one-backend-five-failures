@@ -1,8 +1,9 @@
-# Step 2: a cache in front of the database for opens, in its own Redis.
+# Step 3: a token-bucket limiter on creates, its buckets in the shared state store.
 # Every container below is capped at 1 CPU, so a limit shows up with a small test.
 #
-#   make up                  cache-aside on opens (the default)
-#   make up CACHE=off        every open reads the database: the failure this step solves
+#   make up                  limiter on (the default)
+#   make up LIMITER=off      no limit: the failure this step solves
+#   make up CACHE=off        every open reads the database (step 2's failure)
 #   make up SESSIONS=memory  sessions in each app's memory (step 1's failure)
 name: shortener
 
@@ -18,6 +19,9 @@ x-app: &app
     CACHE_URL: redis://cache:6379/0
     SESSIONS: ${SESSIONS:-redis}
     CACHE: ${CACHE:-redis}
+    LIMITER: ${LIMITER:-on}
+    BUCKET_SIZE: 10
+    REFILL_PER_S: 2
   depends_on:
     db: {condition: service_healthy}
     state: {condition: service_started}
@@ -33,7 +37,7 @@ services:
       POSTGRES_PASSWORD: shortener
       POSTGRES_DB: shortener
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shortener"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U shortener"]
       interval: 2s
       timeout: 3s
       retries: 20
