@@ -4,6 +4,7 @@
 #   make up                  the queue and the worker (the default)
 #   make up DEDUPE=off       the worker does not drop repeated events (to see why it does)
 #   make up LIMITER=off      no limit (step 3's failure); CACHE=off: every open reads the database (step 2's)
+#   make up REPLICA=on       a second database that keeps a copy; opens that miss the cache read from it
 #   make up SESSIONS=memory  sessions in each app's memory (step 1's failure)
 name: shortener
 
@@ -15,6 +16,7 @@ x-app: &app
     DATABASE_URL: postgres://shortener:shortener@db:5432/shortener?pool_max_conns=10
     STATE_URL: redis://state:6379/0
     CACHE_URL: redis://cache:6379/0
+    REPLICA_URL: ${REPLICA_URL:-}   # set by `make up REPLICA=on`; empty: reads go to the primary
     SESSIONS: ${SESSIONS:-redis}
     CACHE: ${CACHE:-redis}
     LIMITER: ${LIMITER:-on}
@@ -24,20 +26,44 @@ x-app: &app
     db: {condition: service_healthy}
     state: {condition: service_started}
     cache: {condition: service_started}
+    replica: {condition: service_healthy, required: false}
 
 services:
+  # The primary: the only database that accepts writes. It sends every change to the replica (when there is one).
   db:
     image: postgres:17
     cpus: 1
+    command: ["postgres", "-c", "wal_level=replica", "-c", "max_wal_senders=5"]
     environment:
       POSTGRES_USER: shortener
       POSTGRES_PASSWORD: shortener
       POSTGRES_DB: shortener
+    volumes:
+      - ./scripts/primary-init.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U shortener"]
       interval: 2s
       timeout: 3s
       retries: 20
+
+  # The replica: starts from a copy of the primary, then follows its changes. It is read-only.
+  replica:
+    image: postgres:17
+    cpus: 1
+    profiles: ["replica"]
+    user: postgres
+    entrypoint: ["/bin/bash", "/replica-start.sh"]
+    environment:
+      PGPASSWORD: replicator
+    volumes:
+      - ./scripts/replica-start.sh:/replica-start.sh:ro
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U shortener"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   state:
     image: redis:7-alpine

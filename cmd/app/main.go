@@ -22,7 +22,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	store, err := links.Open(ctx, env("DATABASE_URL", "postgres://shortener:shortener@localhost:5432/shortener?pool_max_conns=10"))
+	store, err := links.Open(ctx, env("DATABASE_URL", "postgres://shortener:shortener@localhost:5432/shortener?pool_max_conns=10"), os.Getenv("REPLICA_URL")) // REPLICA_URL empty: reads go to the primary
 	if err != nil {
 		log.Fatal(err)
 	}

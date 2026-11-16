@@ -35,7 +35,8 @@ func demo(args []string) {
 	prev := map[string]float64{}
 	for s, b := range rows {
 		r := SecondRow{T: s, Requests: len(b.durations) + b.dropped, Creates: b.creates, OK: b.ok, Unauth: b.unauth, Throttled: b.throttled, Failed: b.failed, Dropped: b.dropped,
-			Abuser: b.abuser, AbuserOK: b.abuserOK, AbuserThrottled: b.abuserThrottled}
+			Abuser: b.abuser, AbuserOK: b.abuserOK, AbuserThrottled: b.abuserThrottled,
+			OpenOK: b.openOK, OpenFailed: b.openFailed, CreateOK: b.createOK, CreateFailed: b.createFailed}
 		r.P50, r.P95 = pct(b.durations, 50), pct(b.durations, 95)
 		if c, ok := cpu[s]; ok {
 			r.CPU = c.cpu
@@ -141,6 +142,19 @@ func demo(args []string) {
 		if after, ok := per100(seconds, killS+3, len(seconds)); ok {
 			out["lookups_per_100_opens_after_kill"] = after
 		}
+		// Which kind of request fails: the shares of opens and of creates that failed in the 10 seconds before the kill, and from 3 seconds after it.
+		if v, ok := failedShare(seconds, killS-10, killS, false); ok {
+			out["opens_failed_pct_before_kill"] = v
+		}
+		if v, ok := failedShare(seconds, killS-10, killS, true); ok {
+			out["creates_failed_pct_before_kill"] = v
+		}
+		if v, ok := failedShare(seconds, killS+3, len(seconds), false); ok {
+			out["opens_failed_pct_after_kill"] = v
+		}
+		if v, ok := failedShare(seconds, killS+3, len(seconds), true); ok {
+			out["creates_failed_pct_after_kill"] = v
+		}
 		out["kill_at_s"] = killS
 		out["kill_window_s"] = *windowS
 		out["kill_window_requests"] = wReq
@@ -179,6 +193,22 @@ func per100(seconds []SecondRow, from, to int) (float64, bool) {
 		return 0, false
 	}
 	return round1(100 * lookups / opens), true
+}
+
+// failedShare is the share (in percent) of opens, or of creates, that failed over seconds [from, to).
+func failedShare(seconds []SecondRow, from, to int, creates bool) (float64, bool) {
+	var ok, failed int
+	for s := max(from, 0); s < to && s < len(seconds); s++ {
+		if creates {
+			ok, failed = ok+seconds[s].CreateOK, failed+seconds[s].CreateFailed
+		} else {
+			ok, failed = ok+seconds[s].OpenOK, failed+seconds[s].OpenFailed
+		}
+	}
+	if ok+failed == 0 {
+		return 0, false
+	}
+	return round1(100 * float64(failed) / float64(ok+failed)), true
 }
 
 // ratio is 100 * a / (a + b) over seconds [from, to), for two counters.

@@ -1,12 +1,22 @@
 STEP ?= step-5-metrics
+REPLICA ?= off
 NAME ?= sessions
 RATE ?= 1000
 RUN  ?= 1
 OUT  := results/$(STEP)/run-$(RUN)
 
-.PHONY: up down seed load test demo-sessions demo-kill demo-cache demo-abuser burst demo-outage demo-dupes slow-open demo-metrics
+.PHONY: up down seed load test demo-sessions demo-kill demo-cache demo-abuser burst demo-outage demo-dupes slow-open demo-metrics demo-db-down demo-replica demo-primary-kill
 
 # The whole service. (`LIMITER=off`, `CACHE=off` and `SESSIONS=memory` bring back the failures of steps 3, 2 and 1.)
+# `make up REPLICA=on` adds a second database that keeps a copy, and the apps read opens that miss the cache from it.
+ifeq ($(REPLICA),on)
+export COMPOSE_PROFILES := replica
+export REPLICA_URL := postgres://shortener:shortener@replica:5432/shortener?pool_max_conns=10
+SERVICES := app1,app2,lb,state,cache,db,worker,replica
+else
+SERVICES := app1,app2,lb,state,cache,db,worker
+endif
+
 up:
 	docker compose up -d --build --wait
 
@@ -16,6 +26,7 @@ down:
 # 100,000 links for the load test to open.
 seed:
 	docker compose exec -T db psql -q -U shortener -d shortener < scripts/seed.sql
+	@if [ "$(REPLICA)" = on ]; then scripts/wait-replica.sh; fi
 
 # Watch it fail: the load rises one level at a time (k6 runs from its Docker image) while container CPU is recorded.
 # Writes results/<step>/run-1/series.json. Tune with: make load STEP_RPS=250 STEP_S=8 LEVELS=16
@@ -62,3 +73,15 @@ demo-dupes:
 # A short load, then what the service says about itself: /metrics and /healthz.
 demo-metrics:
 	STEP=$(STEP) scripts/demo-metrics.sh
+
+# Steady load while the database is stopped (run it with `make up REPLICA=off`): creates fail, opens succeed only from the cache.
+demo-db-down:
+	STEP=$(STEP) NAME=db-down KILL=db KILL_CMD=stop SERVICES=$(SERVICES) RATE=500 DURATION_S=50 KILL_AFTER_S=25 scripts/demo.sh
+
+# The same steady load with the replica on (`make up REPLICA=on`, then `make seed REPLICA=on`): nothing fails.
+demo-replica:
+	STEP=$(STEP) NAME=replica-on SERVICES=$(SERVICES) RATE=500 DURATION_S=50 scripts/demo.sh
+
+# Steady load while the primary is killed, with the replica on: opens keep working, creates fail.
+demo-primary-kill:
+	STEP=$(STEP) NAME=primary-kill KILL=db KILL_CMD=kill SERVICES=$(SERVICES) RATE=500 DURATION_S=50 KILL_AFTER_S=25 scripts/demo.sh

@@ -19,14 +19,16 @@ const schema = `CREATE TABLE IF NOT EXISTS links (
 
 const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
-// Store reads and writes links.
+// Store reads and writes links. Creates and deletes go to the primary; reads go to the replica when there is one.
 type Store struct {
-	pool    *pgxpool.Pool
-	lookups atomic.Int64 // database reads started, shown at /debug/vars
+	pool    *pgxpool.Pool // the primary: every write
+	read    *pgxpool.Pool // the replica, or the primary again when there is no replica
+	lookups atomic.Int64  // database reads started, shown at /debug/vars
 }
 
-// Open connects to Postgres and makes sure the table exists.
-func Open(ctx context.Context, dsn string) (*Store, error) {
+// Open connects to the primary, makes sure the table exists, and, when replicaDSN is not empty, connects to the replica for reads.
+// The table is made on the primary only: a replica is read-only, and it receives the table from the primary.
+func Open(ctx context.Context, dsn, replicaDSN string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, err
@@ -35,7 +37,14 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Store{pool: pool}, nil
+	s := &Store{pool: pool, read: pool}
+	if replicaDSN != "" {
+		if s.read, err = pgxpool.New(ctx, replicaDSN); err != nil {
+			pool.Close()
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 // Create saves url under a new random 7-character code (base 62).
@@ -60,7 +69,7 @@ func (s *Store) Create(ctx context.Context, url string) (string, error) {
 // Lookup returns the long URL for code. ok is false when the code does not exist.
 func (s *Store) Lookup(ctx context.Context, code string) (url string, ok bool, err error) {
 	s.lookups.Add(1)
-	err = s.pool.QueryRow(ctx, `SELECT url FROM links WHERE code = $1`, code).Scan(&url)
+	err = s.read.QueryRow(ctx, `SELECT url FROM links WHERE code = $1`, code).Scan(&url)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}

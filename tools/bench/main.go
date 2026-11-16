@@ -228,23 +228,30 @@ type bucket struct {
 	creates                                int // requests of kind "create" (the ones that need a session)
 	// The one abuser (scenario "abuser") is counted apart from the normal clients.
 	abuser, abuserOK, abuserThrottled, abuserFailed int
+	// The same requests by kind and outcome (a 2xx or 3xx answer is "ok"; a 429 from the limiter is in neither; anything else, a refused connection or a timeout included, is "failed").
+	openOK, openFailed, createOK, createFailed int
 }
 
 // SecondRow is one second of one run, as the video reads it.
 type SecondRow struct {
-	T         int                `json:"t"`
-	Level     int                `json:"level"`
-	Requests  int                `json:"requests"`
-	Creates   int                `json:"creates"`
-	OK        int                `json:"ok"`
-	Unauth    int                `json:"unauth"`
-	Throttled int                `json:"throttled"`
-	Failed    int                `json:"failed"`
-	Dropped   int                `json:"dropped"`
-	P50       float64            `json:"p50_ms"`
-	P95       float64            `json:"p95_ms"`
-	CPU       map[string]float64 `json:"cpu,omitempty"`
-	DBQPS     float64            `json:"db_qps,omitempty"`
+	T         int `json:"t"`
+	Level     int `json:"level"`
+	Requests  int `json:"requests"`
+	Creates   int `json:"creates"`
+	OK        int `json:"ok"`
+	Unauth    int `json:"unauth"`
+	Throttled int `json:"throttled"`
+	Failed    int `json:"failed"`
+	Dropped   int `json:"dropped"`
+	// Opens and creates counted apart, by outcome (the replica demos need to say which kind of request fails). A 429 is in neither.
+	OpenOK       int                `json:"open_ok,omitempty"`
+	OpenFailed   int                `json:"open_failed,omitempty"`
+	CreateOK     int                `json:"create_ok,omitempty"`
+	CreateFailed int                `json:"create_failed,omitempty"`
+	P50          float64            `json:"p50_ms"`
+	P95          float64            `json:"p95_ms"`
+	CPU          map[string]float64 `json:"cpu,omitempty"`
+	DBQPS        float64            `json:"db_qps,omitempty"`
 	// The abuser's creates in this second, when there is one: sent, accepted (201), turned away (429).
 	Abuser          int `json:"abuser,omitempty"`
 	AbuserOK        int `json:"abuser_ok,omitempty"`
@@ -392,6 +399,17 @@ func readK6(path string) ([]bucket, time.Time) {
 			b.durations = append(b.durations, e.dur)
 			if e.create {
 				b.creates++
+			}
+			switch good := e.status >= 200 && e.status < 400; {
+			case e.status == 429: // the limiter turned it away: neither served nor failed
+			case e.create && good:
+				b.createOK++
+			case e.create:
+				b.createFailed++
+			case good:
+				b.openOK++
+			default:
+				b.openFailed++
 			}
 			switch {
 			case e.status == 401:

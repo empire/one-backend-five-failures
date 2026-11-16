@@ -4,6 +4,7 @@
 #   STEP=step-1-stateless NAME=kill KILL=app2 KILL_AFTER_S=15 RATE=1000 DURATION_S=45 scripts/demo.sh
 #   STEP=step-3-ratelimit NAME=abuser-on SCRIPT=abuser.js RATE=550 ABUSER_RPS=20 DURATION_S=30 scripts/demo.sh
 #   STEP=step-2-cache NAME=cache-kill KILL=cache KILL_AFTER_S=25 RATE=500 DURATION_S=50 scripts/demo.sh
+#   STEP=step-2-replica NAME=db-down KILL=db KILL_CMD=stop KILL_AFTER_S=25 RATE=500 DURATION_S=50 scripts/demo.sh
 # Output: results/$STEP/$NAME/run-1/{demo.json,series.json,kill.txt}
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -14,6 +15,7 @@ RATE=${RATE:-500}
 DURATION_S=${DURATION_S:-40}
 SCRIPT=${SCRIPT:-steady.js}     # steady.js, or abuser.js for the noisy-client run
 KILL=${KILL:-}                  # compose service to kill, e.g. app2
+KILL_CMD=${KILL_CMD:-kill}      # `kill` (SIGKILL) or `stop` (a clean stop): the command the video shows
 KILL_AFTER_S=${KILL_AFTER_S:-15}
 WINDOW_S=${WINDOW_S:-10}
 SERVICES=${SERVICES:-app1,app2,lb,state,cache,db,worker}
@@ -37,8 +39,8 @@ one_run() {
       cid=$(docker compose ps -q "$KILL")
       date +%s%3N > "$out/kill.at"
       {
-        echo "\$ docker kill shortener-$KILL-1"
-        docker kill "$cid" 2>&1 | sed "s/^$cid\$/shortener-$KILL-1/"
+        echo "\$ docker $KILL_CMD shortener-$KILL-1"
+        docker "$KILL_CMD" "$cid" 2>&1 | sed "s/^$cid\$/shortener-$KILL-1/"
       } > "$out/kill.txt"
     ) &
     killer=$!
